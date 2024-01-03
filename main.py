@@ -40,7 +40,7 @@ rel_cols = ['expid', 'peakid', 'year', 'season',
             'has_summit', 'bcdate', 'smtdate', 'totdays',
             'termdate', 'termreason', 'termnote', 'highpoint',
             'totmembers', 'smtmembers', 'mdeaths', 'o2used',
-            'has_summit', 'campsites', 'accidents']
+            'campsites', 'accidents']
 exp_df = exp_df[rel_cols]
 
 # Remove campsites that contain "see route details" (or something of the sort)
@@ -205,8 +205,34 @@ def adjust_year_by_previous_date(tuples_list):
 exp_df['camp_tuples'] = exp_df['camp_tuples'].apply(adjust_year_by_previous_date)
 
 # Make main dataframe for o2 plot
-o2_df = exp_df[['expid', 'bcdate', 'smtdate', 'termdate',
-                'totdays', 'highpoint', 'o2used', 'has_summit',
-                'campsites', 'split_camp', 'camp_tuples']]
+o2_df = exp_df[['expid', 'camp_tuples']]
+
+# Explode dataframe
+o2_df = o2_df.explode('camp_tuples')
+o2_df[['date', 'elevation']] = o2_df['camp_tuples'].apply(lambda x: pd.Series([x[0], x[1]]))
+o2_df = o2_df.drop('camp_tuples', axis=1)
+o2_df.sort_values(by=['expid', 'date'], ascending=True, inplace=True, ignore_index=True)
+
+# Remove rows where elevation is above 8849 or below 5360
+o2_df = o2_df.loc[o2_df.elevation.between(5360, 8849), :]
+o2_df.reset_index(inplace=True, drop=True)
+
+
+# Remove rows that ruin the "ascending" of elevation (in order top to bottom by expid)
+def mark_rows(group):
+    group['is_remove'] = False
+    last_accepted_elevation = float('-inf')
+
+    for idx, row in group.iterrows():
+        if row['elevation'] < last_accepted_elevation:
+            group.at[idx, 'is_remove'] = True
+        else:
+            last_accepted_elevation = row['elevation']
+
+    return group
+
+
+o2_df = o2_df.groupby('expid').apply(mark_rows).reset_index(drop=True)
+o2_df = o2_df[~o2_df['is_remove']].drop(columns=['is_remove'])
 
 print(o2_df.head())
