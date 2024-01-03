@@ -3,7 +3,8 @@ import os
 import re
 import numpy as np
 from datetime import datetime, timedelta
-# import matplotlib.pyplot as plt
+from scipy.interpolate import PchipInterpolator
+import matplotlib.pyplot as plt
 
 pd.set_option('display.max_columns', 500)
 pd.set_option('display.width', 1000)
@@ -11,6 +12,8 @@ pd.set_option('display.width', 1000)
 # Global variables
 INPUT_FILEPATH = os.path.join('data', 'input')
 EXPED_FILENAME = 'expeditions.csv'
+BLUE = "#0047AB"
+BLACK = "#1C2321"
 
 # Import data and drop useless rows
 exp_df = pd.read_csv(os.path.join(INPUT_FILEPATH, EXPED_FILENAME))
@@ -115,9 +118,11 @@ camp_dict['Smt'] = 8849.0
 exp_df = exp_df.loc[exp_df['campsites'].str.lower().str.startswith('bc'), :]
 exp_df.reset_index(inplace=True, drop=True)
 
-# Fill in missing elevations using the camp map
+# Fill in missing elevations using the camp map (override basecamp)
 exp_df['camp_tuples'] = exp_df['camp_tuples']\
     .apply(lambda x: [(d, e, c) if e is not None else (d, camp_dict.get(c), c) for (d, e, c) in x])
+exp_df['camp_tuples'] = exp_df['camp_tuples']\
+    .apply(lambda x: [(d, e, c) if c.lower() != 'bc' else (d, camp_dict.get(c), c) for (d, e, c) in x])
 
 # Remove tuples where elevation is still None
 exp_df['camp_tuples'] = exp_df['camp_tuples'].apply(lambda x: [ele for ele in x if ele[1] is not None])
@@ -140,25 +145,6 @@ exp_df['camp_tuples'] = [
     for tuples_list, additional_tuple in zip(exp_df['camp_tuples'], exp_df['bc_tuple'])
 ]
 
-
-# Custom function to filter the tuples based on unique elevations
-def filter_unique_elevations(tuples_list):
-    unique_elevations = set()
-    result_tuples = []
-
-    for tup in tuples_list:
-        elevation = tup[1]
-        if elevation not in unique_elevations:
-            result_tuples.append(tup)
-            unique_elevations.add(elevation)
-
-    return result_tuples
-
-
-# Apply the function to each element in the series
-exp_df['camp_tuples'] = exp_df['camp_tuples'].apply(filter_unique_elevations)
-
-
 # Add year information to records
 def flip_date_format_and_add_year(row):
     return [(f'{row["year"]}/{datetime.strptime(date, "%d/%m").strftime("%m/%d")}', elevation)
@@ -166,21 +152,6 @@ def flip_date_format_and_add_year(row):
 
 
 exp_df['camp_tuples'] = exp_df.apply(flip_date_format_and_add_year, axis=1)
-
-
-def remove_duplicates_by_date(tuples_list):
-    seen_dates = set()
-    result_list = []
-
-    for date, elevation in tuples_list:
-        if date not in seen_dates:
-            result_list.append((date, elevation))
-            seen_dates.add(date)
-
-    return result_list
-
-
-exp_df['camp_tuples'] = exp_df['camp_tuples'].apply(remove_duplicates_by_date)
 
 
 def adjust_year_by_previous_date(tuples_list):
@@ -204,8 +175,23 @@ def adjust_year_by_previous_date(tuples_list):
 
 exp_df['camp_tuples'] = exp_df['camp_tuples'].apply(adjust_year_by_previous_date)
 
+
+def remove_duplicates_by_date(tuples_list):
+    seen_dates = set()
+    result_list = []
+
+    for date, elevation in tuples_list:
+        if date not in seen_dates:
+            result_list.append((date, elevation))
+            seen_dates.add(date)
+
+    return result_list
+
+
+exp_df['camp_tuples'] = exp_df['camp_tuples'].apply(remove_duplicates_by_date)
+
 # Make main dataframe for o2 plot
-o2_df = exp_df[['expid', 'camp_tuples']]
+o2_df = exp_df[['expid', 'camp_tuples', 'o2used']]
 
 # Explode dataframe
 o2_df = o2_df.explode('camp_tuples')
@@ -214,11 +200,11 @@ o2_df = o2_df.drop('camp_tuples', axis=1)
 o2_df.sort_values(by=['expid', 'date'], ascending=True, inplace=True, ignore_index=True)
 
 # Remove rows where elevation is above 8849 or below 5360
-o2_df = o2_df.loc[o2_df.elevation.between(5360, 8849), :]
+o2_df = o2_df.loc[o2_df.elevation.between(5360, 8849, inclusive='both'), :]
 o2_df.reset_index(inplace=True, drop=True)
 
 
-# Remove rows that ruin the "ascending" of elevation (in order top to bottom by expid)
+# Remove rows that ruin the "ascending" of elevation (in order top to bottom by expid, first should never be removed)
 def mark_rows(group):
     group['is_remove'] = False
     last_accepted_elevation = float('-inf')
@@ -235,4 +221,71 @@ def mark_rows(group):
 o2_df = o2_df.groupby('expid').apply(mark_rows).reset_index(drop=True)
 o2_df = o2_df[~o2_df['is_remove']].drop(columns=['is_remove'])
 
-print(o2_df.head())
+# Add timedeltas
+o2_df['date'] = pd.to_datetime(o2_df['date'], errors='coerce')  # Make sure the 'date' column is in datetime format
+
+
+def add_time_delta(group):
+    group['time_delta_days'] = (group['date'] - group['date'].iloc[0]).dt.days
+    return group
+
+
+o2_df = o2_df.groupby('expid').apply(add_time_delta).reset_index(drop=True)
+
+# Keep only expeditions that lasted at least 2 days and at most 80 (to the summit)
+keep_df = o2_df.groupby(by='expid')['time_delta_days'].max().reset_index()\
+    .query('time_delta_days >= 2 and time_delta_days <= 80')[['expid']]\
+    .reset_index(drop=True)
+o2_df = keep_df.merge(o2_df, how='left', on='expid')
+o2_df.rename(columns={'time_delta_days': 'x', 'elevation': 'y'}, inplace=True)
+
+# Keep only expeditions that start at BC  # TODO: why is this issue cropping up? shouldn't this have been taken care of?
+keep_df = o2_df.groupby(by='expid')['y'].min().reset_index()\
+    .query('y == 5360')[['expid']]\
+    .reset_index(drop=True)
+o2_df = keep_df.merge(o2_df, how='left', on='expid')
+o2_df.reset_index(inplace=True, drop=True)
+
+
+# Interpolate
+def interpolate_y(group_df):
+
+    x = group_df['x']
+    y = group_df['y']
+
+    new_x = np.linspace(min(x), max(x), 1000)
+
+    interpolator = PchipInterpolator(x, y)
+    new_y = interpolator(new_x)
+
+    interp_dict = {'x': x.values[-1],
+                   'y': y.values[-1],
+                   'x_new': new_x,
+                   'y_new': new_y,
+                   'color': BLACK if group_df.o2used.iloc[0] else BLACK,
+                   'linewidth': 1 if group_df.o2used.iloc[0] else 1,
+                   'alpha': 0.2 if group_df.o2used.iloc[0] else 0.2}
+
+    return interp_dict
+
+
+df_lst = []
+for _, group_df in o2_df.groupby('expid'):
+
+    df_lst.append(interpolate_y(group_df))
+
+# Make plot
+for interp_dict in df_lst:
+    x = interp_dict['x_new']
+    y = interp_dict['y_new']
+    plt.plot(x, y, '-', label='Interpolated Data',
+             linewidth=interp_dict['linewidth'],
+             color=interp_dict['color'], alpha=interp_dict['alpha'])
+
+for interp_dict in df_lst:
+    plt.plot(interp_dict['x'], interp_dict['y'], 'o', label='Original Points', markersize=2, color=interp_dict['color'], alpha=1)
+
+plt.savefig('output_plot.svg', format='svg')
+plt.show()
+
+print('done')
