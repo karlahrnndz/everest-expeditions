@@ -1,25 +1,24 @@
-import pandas as pd
-import os
-import re
-import numpy as np
 from datetime import datetime, timedelta
 from scipy.interpolate import PchipInterpolator
 import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+import os
+import re
 
 pd.set_option('display.max_columns', 500)
 pd.set_option('display.width', 1000)
 
 # Global variables
-INPUT_FILEPATH = os.path.join('data', 'input')
+INPUT_FOLDER = os.path.join('data', 'input')
+OUTPUT_FOLDER = os.path.join('data', 'output')
 EXPED_FILENAME = 'expeditions.csv'
-BLUE = "#0047AB"
 BLACK = "#020202"
 YELLOW = "#f5d364"
 
 # Import data and drop useless rows
-exp_df = pd.read_csv(os.path.join(INPUT_FILEPATH, EXPED_FILENAME))
+exp_df = pd.read_csv(os.path.join(INPUT_FOLDER, EXPED_FILENAME))
 exp_df.query("peakid == 'EVER'", inplace=True)  # Only everest
-# exp_df['termdate'] = pd.to_datetime(exp_df['termdate'], errors='coerce')
 exp_df['bcdate'] = pd.to_datetime(exp_df['bcdate'], errors='coerce')
 exp_df['smtdate'] = pd.to_datetime(exp_df['smtdate'], errors='coerce')
 exp_df.dropna(subset=['expid', 'peakid', 'year', 'disputed',
@@ -193,17 +192,17 @@ def remove_duplicates_by_date(tuples_list):
 exp_df['camp_tuples'] = exp_df['camp_tuples'].apply(remove_duplicates_by_date)
 
 # Make main dataframe for o2 plot
-o2_df = exp_df[['expid', 'camp_tuples', 'o2used']]
+profile_df = exp_df[['expid', 'camp_tuples']]
 
 # Explode dataframe
-o2_df = o2_df.explode('camp_tuples')
-o2_df[['date', 'elevation']] = o2_df['camp_tuples'].apply(lambda x: pd.Series([x[0], x[1]]))
-o2_df = o2_df.drop('camp_tuples', axis=1)
-o2_df.sort_values(by=['expid', 'date'], ascending=True, inplace=True, ignore_index=True)
+profile_df = profile_df.explode('camp_tuples')
+profile_df[['date', 'elevation']] = profile_df['camp_tuples'].apply(lambda x: pd.Series([x[0], x[1]]))
+profile_df = profile_df.drop('camp_tuples', axis=1)
+profile_df.sort_values(by=['expid', 'date'], ascending=True, inplace=True, ignore_index=True)
 
 # Remove rows where elevation is above 8849 or below 5360
-o2_df = o2_df.loc[o2_df.elevation.between(5360, 8849, inclusive='both'), :]
-o2_df.reset_index(inplace=True, drop=True)
+profile_df = profile_df.loc[profile_df.elevation.between(5360, 8849, inclusive='both'), :]
+profile_df.reset_index(inplace=True, drop=True)
 
 
 # Remove rows that ruin the "ascending" of elevation (in order top to bottom by expid, first should never be removed)
@@ -220,11 +219,11 @@ def mark_rows(group):
     return group
 
 
-o2_df = o2_df.groupby('expid').apply(mark_rows).reset_index(drop=True)
-o2_df = o2_df[~o2_df['is_remove']].drop(columns=['is_remove'])
+profile_df = profile_df.groupby('expid').apply(mark_rows).reset_index(drop=True)
+profile_df = profile_df[~profile_df['is_remove']].drop(columns=['is_remove'])
 
 # Add timedeltas
-o2_df['date'] = pd.to_datetime(o2_df['date'], errors='coerce')  # Make sure the 'date' column is in datetime format
+profile_df['date'] = pd.to_datetime(profile_df['date'], errors='coerce')  # Make sure the 'date' column is in datetime format
 
 
 def add_time_delta(group):
@@ -232,21 +231,24 @@ def add_time_delta(group):
     return group
 
 
-o2_df = o2_df.groupby('expid').apply(add_time_delta).reset_index(drop=True)
+profile_df = profile_df.groupby('expid').apply(add_time_delta).reset_index(drop=True)
 
 # Keep only expeditions that lasted at least 2 days and at most 80 (to the summit)
-keep_df = o2_df.groupby(by='expid')['time_delta_days'].max().reset_index()\
+keep_df = profile_df.groupby(by='expid')['time_delta_days'].max().reset_index()\
     .query('time_delta_days >= 2 and time_delta_days <= 80')[['expid']]\
     .reset_index(drop=True)
-o2_df = keep_df.merge(o2_df, how='left', on='expid')
-o2_df.rename(columns={'time_delta_days': 'x', 'elevation': 'y'}, inplace=True)
+profile_df = keep_df.merge(profile_df, how='left', on='expid')
+profile_df.rename(columns={'time_delta_days': 'x', 'elevation': 'y'}, inplace=True)
 
 # Keep only expeditions that start at BC  # TODO: why is this issue cropping up? shouldn't this have been taken care of?
-keep_df = o2_df.groupby(by='expid')['y'].min().reset_index()\
+keep_df = profile_df.groupby(by='expid')['y'].min().reset_index()\
     .query('y == 5360')[['expid']]\
     .reset_index(drop=True)
-o2_df = keep_df.merge(o2_df, how='left', on='expid')
-o2_df.reset_index(inplace=True, drop=True)
+profile_df = keep_df.merge(profile_df, how='left', on='expid')
+profile_df.reset_index(inplace=True, drop=True)
+
+# Save
+profile_df.to_csv(os.path.join(OUTPUT_FOLDER, 'profile_df.csv'), index=False)
 
 # Interpolate
 key_exped = ["EVER53101-1953", "EVER19157-2019", "EVER86201-1986", "EVER75101-1975"]
@@ -274,7 +276,7 @@ def interpolate_y(df):
 
 
 df_lst = []
-for _, group_df in o2_df.groupby('expid'):
+for _, group_df in profile_df.groupby('expid'):
 
     df_lst.append(interpolate_y(group_df))
 
@@ -297,5 +299,5 @@ plt.plot(26, 8849, 'x', color='r')
 plt.plot(38, 8849, 'x', color='r')
 plt.plot(51, 8849, 'x', color='r')
 
-plt.savefig('output_plot.svg', format='svg')
+plt.savefig(os.path.join(OUTPUT_FOLDER, 'output_plot.svg'), format='svg')
 plt.show()
