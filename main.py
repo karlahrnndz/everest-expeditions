@@ -223,7 +223,7 @@ profile_df = profile_df.groupby('expid').apply(mark_rows).reset_index(drop=True)
 profile_df = profile_df[~profile_df['is_remove']].drop(columns=['is_remove'])
 
 # Add timedeltas
-profile_df['date'] = pd.to_datetime(profile_df['date'], errors='coerce')  # Make sure the 'date' column is in datetime format
+profile_df['date'] = pd.to_datetime(profile_df['date'], errors='coerce')
 
 
 def add_time_delta(group):
