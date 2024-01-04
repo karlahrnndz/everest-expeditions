@@ -13,18 +13,19 @@ pd.set_option('display.width', 1000)
 INPUT_FILEPATH = os.path.join('data', 'input')
 EXPED_FILENAME = 'expeditions.csv'
 BLUE = "#0047AB"
-BLACK = "#1C2321"
+BLACK = "#020202"
+YELLOW = "#f5d364"
 
 # Import data and drop useless rows
 exp_df = pd.read_csv(os.path.join(INPUT_FILEPATH, EXPED_FILENAME))
 exp_df.query("peakid == 'EVER'", inplace=True)  # Only everest
-exp_df['termdate'] = pd.to_datetime(exp_df['termdate'], errors='coerce')
+# exp_df['termdate'] = pd.to_datetime(exp_df['termdate'], errors='coerce')
 exp_df['bcdate'] = pd.to_datetime(exp_df['bcdate'], errors='coerce')
 exp_df['smtdate'] = pd.to_datetime(exp_df['smtdate'], errors='coerce')
 exp_df.dropna(subset=['expid', 'peakid', 'year', 'disputed',
-                      'claimed', 'bcdate', 'smtdate', 'termdate',
-                      'bcdate', 'termreason', 'highpoint', 'season',
-                      'o2used', 'totmembers', 'mdeaths', 'campsites'],
+                      'claimed', 'bcdate', 'smtdate', 'bcdate',
+                      'termreason', 'highpoint', 'season', 'o2used',
+                      'totmembers', 'mdeaths', 'campsites'],
               inplace=True, ignore_index=True)  # Make sure these values are present
 
 # Add "is_considered" and filter to relevant records
@@ -41,9 +42,9 @@ exp_df['expid'] = exp_df['expid'] + '-' + exp_df['year'].astype(str)
 # Kee only relevant columns
 rel_cols = ['expid', 'peakid', 'year', 'season',
             'has_summit', 'bcdate', 'smtdate', 'totdays',
-            'termdate', 'termreason', 'termnote', 'highpoint',
-            'totmembers', 'smtmembers', 'mdeaths', 'o2used',
-            'campsites', 'accidents']
+            'termreason', 'termnote', 'highpoint', 'totmembers',
+            'smtmembers', 'mdeaths', 'o2used', 'campsites',
+            'accidents']
 exp_df = exp_df[rel_cols]
 
 # Remove campsites that contain "see route details" (or something of the sort)
@@ -144,6 +145,7 @@ exp_df['camp_tuples'] = [
     [additional_tuple] + tuples_list
     for tuples_list, additional_tuple in zip(exp_df['camp_tuples'], exp_df['bc_tuple'])
 ]
+
 
 # Add year information to records
 def flip_date_format_and_add_year(row):
@@ -246,27 +248,29 @@ keep_df = o2_df.groupby(by='expid')['y'].min().reset_index()\
 o2_df = keep_df.merge(o2_df, how='left', on='expid')
 o2_df.reset_index(inplace=True, drop=True)
 
-
 # Interpolate
-def interpolate_y(group_df):
+key_exped = ["EVER53101-1953", "EVER19157-2019", "EVER86201-1986", "EVER75101-1975"]
 
-    x = group_df['x']
-    y = group_df['y']
 
-    new_x = np.linspace(min(x), max(x), 1000)
+def interpolate_y(df):
+    expid = df.expid.iloc[0]
+    x_old = df['x']
+    y_old = df['y']
 
-    interpolator = PchipInterpolator(x, y)
+    new_x = np.linspace(min(x_old), max(x_old), 1000)
+
+    interpolator = PchipInterpolator(x_old, y_old)
     new_y = interpolator(new_x)
 
-    interp_dict = {'x': x.values[-1],
-                   'y': y.values[-1],
+    result_dict = {'x_old': x_old.values[-1],
+                   'y_old': y_old.values[-1],
                    'x_new': new_x,
                    'y_new': new_y,
-                   'color': BLACK if group_df.o2used.iloc[0] else BLACK,
-                   'linewidth': 1 if group_df.o2used.iloc[0] else 1,
-                   'alpha': 0.2 if group_df.o2used.iloc[0] else 0.2}
+                   'color': YELLOW if expid in key_exped else BLACK,
+                   'linewidth': 2 if expid in key_exped else 1,
+                   'alpha': 1 if expid in key_exped else 0.2}
 
-    return interp_dict
+    return result_dict
 
 
 df_lst = []
@@ -276,16 +280,22 @@ for _, group_df in o2_df.groupby('expid'):
 
 # Make plot
 for interp_dict in df_lst:
-    x = interp_dict['x_new']
-    y = interp_dict['y_new']
-    plt.plot(x, y, '-', label='Interpolated Data',
+    x_new = interp_dict['x_new']
+    y_new = interp_dict['y_new']
+    plt.plot(x_new, y_new, '-', label='Interpolated Data',
              linewidth=interp_dict['linewidth'],
              color=interp_dict['color'], alpha=interp_dict['alpha'])
 
 for interp_dict in df_lst:
-    plt.plot(interp_dict['x'], interp_dict['y'], 'o', label='Original Points', markersize=2, color=interp_dict['color'], alpha=1)
+    plt.plot(interp_dict['x_old'], interp_dict['y_old'], 'o',
+             label='Original Points',
+             markersize=2,
+             color=interp_dict['color'],
+             alpha=1)
+
+plt.plot(26, 8849, 'x', color='r')
+plt.plot(38, 8849, 'x', color='r')
+plt.plot(51, 8849, 'x', color='r')
 
 plt.savefig('output_plot.svg', format='svg')
 plt.show()
-
-print('done')
