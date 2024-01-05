@@ -1,2 +1,2 @@
 # himalayan-db
-Visualizing data from the Himalayan Database.
+Visualizing the elevation of Everest expeditions as recorded in the Himalayan Database.
